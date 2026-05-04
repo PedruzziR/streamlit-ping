@@ -1,11 +1,15 @@
 import asyncio
 import json
 import os
+import time
 from datetime import datetime, timezone
 
 import aiohttp
-from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
 
+# ================= URLS DOS APPS =================
 STREAMLIT_APPS = [
     "https://neuropsicologabrunaligoskiifp2.streamlit.app/",
     "https://neuropsicologabrunaligoski-aivd-familiar.streamlit.app/",
@@ -28,88 +32,73 @@ STREAMLIT_APPS = [
     "https://neuropsicologa-bruna-ligoski-formulario-inicial-infantil.streamlit.app/",
 ]
 
-SLEEP_BUTTON_TEXT = "Yes, get this app back up!"
-
-PAGE_LOAD_WAIT_MS = 12_000   # aguarda React renderizar (mesmo princípio dos 15s do bot desktop)
-CONCURRENCY = 5              # páginas abertas em paralelo
-NAV_TIMEOUT_MS = 35_000
+# URL deste próprio app após deploy — preencher em Settings > Variables > PING_APP_URL
+PING_APP_URL = os.environ.get("PING_APP_URL", "")
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 LOG_TABLE = "streamlit_ping_log"
+# ==================================================
 
 
 def _slug(url: str) -> str:
     return url.split("//")[1].split(".streamlit")[0]
 
 
-async def visit_app(page, url: str) -> dict:
-    slug = _slug(url)
+def _make_driver() -> webdriver.Chrome:
+    opts = Options()
+    opts.add_argument("--headless=new")
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+    return webdriver.Chrome(options=opts)  # Selenium Manager resolve o driver automaticamente
+
+
+def run_bot() -> list[dict]:
+    all_urls = list(STREAMLIT_APPS)
+    if PING_APP_URL:
+        all_urls.append(PING_APP_URL)
+
+    results = []
+    driver = _make_driver()
+
     try:
-        await page.goto(url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
-        await page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
+        for url in all_urls:
+            slug = _slug(url)
+            try:
+                driver.get(url)
+                time.sleep(15)  # aguarda React renderizar (igual ao bot desktop)
 
-        sleeping = False
-        sleep_btn = page.get_by_text(SLEEP_BUTTON_TEXT, exact=False)
-        if await sleep_btn.count() > 0:
-            await sleep_btn.first.click()
-            sleeping = True
-
-        return {
-            "url": url,
-            "slug": slug,
-            "sleeping": sleeping,
-            "ok": True,
-            "error": None,
-            "http_status": 200,
-        }
-    except PlaywrightTimeout:
-        return {
-            "url": url,
-            "slug": slug,
-            "sleeping": None,
-            "ok": False,
-            "error": "Timeout",
-            "http_status": None,
-        }
-    except Exception as exc:
-        return {
-            "url": url,
-            "slug": slug,
-            "sleeping": None,
-            "ok": False,
-            "error": str(exc),
-            "http_status": None,
-        }
-
-
-async def ping_all() -> list[dict]:
-    semaphore = asyncio.Semaphore(CONCURRENCY)
-
-    async with async_playwright() as pw:
-        browser = await pw.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-        )
-
-        async def run_one(url: str) -> dict:
-            async with semaphore:
-                page = await browser.new_page(
-                    user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0.0.0 Safari/537.36"
-                    )
+                # Acorda o app se estiver dormindo
+                sleep_btns = driver.find_elements(
+                    By.XPATH, "//*[contains(text(), 'Yes, get this app back up!')]"
                 )
-                try:
-                    return await visit_app(page, url)
-                finally:
-                    await page.close()
+                if sleep_btns:
+                    driver.execute_script("arguments[0].click();", sleep_btns[0])
+                    print(f"  [SLEEP]  {slug:<60}  botão clicado — app retomando")
+                    results.append({"url": url, "slug": slug, "sleeping": True, "ok": True, "error": None})
+                else:
+                    # Se for o próprio app de ping, clica em "Manter ativo" (loop eterno)
+                    if url == PING_APP_URL:
+                        keepalive_btns = driver.find_elements(
+                            By.XPATH, "//*[contains(text(), 'Manter ativo')]"
+                        )
+                        if keepalive_btns:
+                            driver.execute_script("arguments[0].click();", keepalive_btns[0])
+                    print(f"  [OK   ]  {slug:<60}  online")
+                    results.append({"url": url, "slug": slug, "sleeping": False, "ok": True, "error": None})
 
-        tasks = [run_one(url) for url in STREAMLIT_APPS]
-        results = await asyncio.gather(*tasks)
-        await browser.close()
-        return list(results)
+            except Exception as exc:
+                print(f"  [ERROR]  {slug:<60}  {exc}")
+                results.append({"url": url, "slug": slug, "sleeping": None, "ok": False, "error": str(exc)})
+    finally:
+        driver.quit()
+
+    return results
 
 
 async def log_to_supabase(results: list[dict]) -> None:
@@ -125,14 +114,12 @@ async def log_to_supabase(results: list[dict]) -> None:
         "error_count": sum(1 for r in results if r.get("error")),
         "details": json.dumps(results),
     }
-
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
         "Prefer": "return=minimal",
     }
-
     timeout = aiohttp.ClientTimeout(total=10)
     async with aiohttp.ClientSession() as session:
         async with session.post(
@@ -148,31 +135,35 @@ async def log_to_supabase(results: list[dict]) -> None:
                 print("[supabase] Log saved.")
 
 
-async def run() -> None:
+def main() -> None:
+    all_urls = STREAMLIT_APPS + ([PING_APP_URL] if PING_APP_URL else [])
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    print(f"=== streamlit_ping | {now} | {len(STREAMLIT_APPS)} apps ===\n")
+    print(f"=== streamlit_ping | {now} | {len(all_urls)} apps ===\n")
 
-    results = await ping_all()
-
-    for r in sorted(results, key=lambda x: x["slug"]):
-        if r["error"]:
-            state = "ERROR"
-            detail = r["error"]
-        elif r["sleeping"]:
-            state = "SLEEP"
-            detail = "botão clicado — app retomando"
-        else:
-            state = "OK   "
-            detail = "online"
-        print(f"  [{state}]  {r['slug']:<60}  {detail}")
+    results = run_bot()
 
     ok = sum(1 for r in results if r["ok"])
     sleeping = sum(1 for r in results if r.get("sleeping"))
     errors = sum(1 for r in results if r.get("error"))
     print(f"\n  Total: {len(results)}  |  OK: {ok}  |  Dormindo: {sleeping}  |  Erros: {errors}\n")
 
-    await log_to_supabase(results)
+    asyncio.run(log_to_supabase(results))
+
+
+# ─── Interface Streamlit (ativa quando deployed no Streamlit Community Cloud) ─
+try:
+    import streamlit as st
+    if st.runtime.exists():
+        st.set_page_config(page_title="Ping Monitor", page_icon="🏓")
+        st.title("Monitor de Apps")
+        st.caption("Mantido ativo pelo robô de ping a cada 15 minutos.")
+        if st.button("Manter ativo", key="keepalive", type="primary", use_container_width=True):
+            st.success("Ping recebido — app ativo!")
+        else:
+            st.info("Aguardando próximo ping...")
+except Exception:
+    pass
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    main()
