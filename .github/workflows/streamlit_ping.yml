@@ -1,6 +1,9 @@
-# Secrets necessários no repositório (Settings > Secrets and variables > Actions):
-#   SUPABASE_URL          → URL do seu projeto Supabase (ex: https://xxxx.supabase.co)
+# Secrets necessários (Settings > Secrets and variables > Actions):
+#   SUPABASE_URL          → URL do projeto Supabase (ex: https://xxxx.supabase.co)
 #   SUPABASE_SERVICE_KEY  → service_role key do Supabase (não a anon key)
+#
+# Variável necessária (Settings > Secrets and variables > Actions > Variables):
+#   PING_APP_URL          → URL do ping_app.py após deploy no Streamlit Community Cloud
 
 name: Streamlit App Ping
 
@@ -12,7 +15,7 @@ on:
 jobs:
   ping:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4
@@ -22,11 +25,26 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
-        run: pip install aiohttp
+      - name: Install Python dependencies
+        run: pip install playwright aiohttp
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: playwright install chromium
+
+      - name: Install Playwright system dependencies
+        run: playwright install-deps chromium
 
       - name: Run ping
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          PING_APP_URL: ${{ vars.PING_APP_URL }}
         run: python streamlit_ping.py

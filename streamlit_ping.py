@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timezone
 
 import aiohttp
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeout
 
 STREAMLIT_APPS = [
     "https://neuropsicologabrunaligoskiifp2.streamlit.app/",
@@ -27,24 +28,12 @@ STREAMLIT_APPS = [
     "https://neuropsicologa-bruna-ligoski-formulario-inicial-infantil.streamlit.app/",
 ]
 
-SLEEP_MARKERS = [
-    "Yes, get this app back up!",
-    "This app has gone to sleep",
-    "app has gone to sleep",
-    "Zzzz",
-]
+SLEEP_BUTTON_TEXT = "Yes, get this app back up!"
+KEEPALIVE_BUTTON_TEXT = "Manter ativo"
 
-REQUEST_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
-}
-
-TIMEOUT_SECONDS = 30
+PAGE_LOAD_WAIT_MS = 12_000   # aguarda React renderizar (mesmo princípio dos 15s do bot desktop)
+CONCURRENCY = 5              # páginas abertas em paralelo
+NAV_TIMEOUT_MS = 35_000
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
@@ -55,36 +44,78 @@ def _slug(url: str) -> str:
     return url.split("//")[1].split(".streamlit")[0]
 
 
-async def ping(session: aiohttp.ClientSession, url: str) -> dict:
+async def visit_app(page, url: str) -> dict:
     slug = _slug(url)
     try:
-        timeout = aiohttp.ClientTimeout(total=TIMEOUT_SECONDS)
-        async with session.get(url, timeout=timeout, allow_redirects=True) as resp:
-            body = await resp.text()
-            sleeping = any(m in body for m in SLEEP_MARKERS)
-            return {
-                "url": url,
-                "slug": slug,
-                "http_status": resp.status,
-                "sleeping": sleeping,
-                "ok": resp.status < 400,
-                "error": None,
-            }
+        await page.goto(url, timeout=NAV_TIMEOUT_MS, wait_until="domcontentloaded")
+        await page.wait_for_timeout(PAGE_LOAD_WAIT_MS)
+
+        sleeping = False
+        sleep_btn = page.get_by_text(SLEEP_BUTTON_TEXT, exact=False)
+        if await sleep_btn.count() > 0:
+            await sleep_btn.first.click()
+            sleeping = True
+
+        if not sleeping:
+            keepalive_btn = page.get_by_text(KEEPALIVE_BUTTON_TEXT, exact=False)
+            if await keepalive_btn.count() > 0:
+                await keepalive_btn.first.click()
+
+        return {
+            "url": url,
+            "slug": slug,
+            "sleeping": sleeping,
+            "ok": True,
+            "error": None,
+            "http_status": 200,
+        }
+    except PlaywrightTimeout:
+        return {
+            "url": url,
+            "slug": slug,
+            "sleeping": None,
+            "ok": False,
+            "error": "Timeout",
+            "http_status": None,
+        }
     except Exception as exc:
         return {
             "url": url,
             "slug": slug,
-            "http_status": None,
             "sleeping": None,
             "ok": False,
             "error": str(exc),
+            "http_status": None,
         }
 
 
 async def ping_all() -> list[dict]:
-    async with aiohttp.ClientSession(headers=REQUEST_HEADERS) as session:
-        tasks = [ping(session, url) for url in STREAMLIT_APPS]
-        return await asyncio.gather(*tasks)
+    semaphore = asyncio.Semaphore(CONCURRENCY)
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+        )
+
+        async def run_one(url: str) -> dict:
+            async with semaphore:
+                page = await browser.new_page(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/120.0.0.0 Safari/537.36"
+                    )
+                )
+                try:
+                    return await visit_app(page, url)
+                finally:
+                    await page.close()
+
+        tasks = [run_one(url) for url in STREAMLIT_APPS]
+        results = await asyncio.gather(*tasks)
+        await browser.close()
+        return list(results)
 
 
 async def log_to_supabase(results: list[dict]) -> None:
@@ -135,16 +166,16 @@ async def run() -> None:
             detail = r["error"]
         elif r["sleeping"]:
             state = "SLEEP"
-            detail = f"HTTP {r['http_status']} — ping sent, app will resume"
+            detail = "botão clicado — app retomando"
         else:
             state = "OK   "
-            detail = f"HTTP {r['http_status']}"
+            detail = "online"
         print(f"  [{state}]  {r['slug']:<60}  {detail}")
 
     ok = sum(1 for r in results if r["ok"])
     sleeping = sum(1 for r in results if r.get("sleeping"))
     errors = sum(1 for r in results if r.get("error"))
-    print(f"\n  Total: {len(results)}  |  OK: {ok}  |  Sleeping: {sleeping}  |  Errors: {errors}\n")
+    print(f"\n  Total: {len(results)}  |  OK: {ok}  |  Dormindo: {sleeping}  |  Erros: {errors}\n")
 
     await log_to_supabase(results)
 
