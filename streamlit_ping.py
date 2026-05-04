@@ -29,7 +29,6 @@ STREAMLIT_APPS = [
 ]
 
 SLEEP_BUTTON_TEXT = "Yes, get this app back up!"
-KEEPALIVE_BUTTON_TEXT = "Manter ativo"
 
 PAGE_LOAD_WAIT_MS = 12_000   # aguarda React renderizar (mesmo princípio dos 15s do bot desktop)
 CONCURRENCY = 5              # páginas abertas em paralelo
@@ -55,11 +54,6 @@ async def visit_app(page, url: str) -> dict:
         if await sleep_btn.count() > 0:
             await sleep_btn.first.click()
             sleeping = True
-
-        if not sleeping:
-            keepalive_btn = page.get_by_text(KEEPALIVE_BUTTON_TEXT, exact=False)
-            if await keepalive_btn.count() > 0:
-                await keepalive_btn.first.click()
 
         return {
             "url": url,
