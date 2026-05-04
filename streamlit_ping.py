@@ -150,20 +150,26 @@ def main() -> None:
     asyncio.run(log_to_supabase(results))
 
 
-# ─── Interface Streamlit (ativa quando deployed no Streamlit Community Cloud) ─
-try:
+# ─── Detecta se está rodando dentro do Streamlit Community Cloud ─────────────
+def _in_streamlit() -> bool:
+    try:
+        import streamlit as st
+        return st.runtime.exists()
+    except Exception:
+        return False
+
+
+if _in_streamlit():
+    # Modo Streamlit: exibe apenas a UI, NÃO executa o bot (Chrome não existe aqui)
     import streamlit as st
-    if st.runtime.exists():
-        st.set_page_config(page_title="Ping Monitor", page_icon="🏓")
-        st.title("Monitor de Apps")
-        st.caption("Mantido ativo pelo robô de ping a cada 15 minutos.")
-        if st.button("Manter ativo", key="keepalive", type="primary", use_container_width=True):
-            st.success("Ping recebido — app ativo!")
-        else:
-            st.info("Aguardando próximo ping...")
-except Exception:
-    pass
+    st.set_page_config(page_title="Ping Monitor", page_icon="🏓")
+    st.title("Monitor de Apps")
+    st.caption("Mantido ativo pelo robô de ping a cada 15 minutos.")
+    if st.button("Manter ativo", key="keepalive", type="primary", use_container_width=True):
+        st.success("Ping recebido — app ativo!")
+    else:
+        st.info("Aguardando próximo ping...")
 
-
-if __name__ == "__main__":
+elif __name__ == "__main__":
+    # Modo GitHub Actions: executa o bot Selenium normalmente
     main()
