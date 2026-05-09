@@ -30,6 +30,7 @@ STREAMLIT_APPS = [
     "https://paineldecontroleavaliacoesneuropsicologicas.streamlit.app/",
     "https://neuropsicologa-bruna-ligoski-formulario-inicial-adulto.streamlit.app/",
     "https://neuropsicologa-bruna-ligoski-formulario-inicial-infantil.streamlit.app/",
+    "https://psicologabrunaligoski.streamlit.app/",
 ]
 
 # URL deste próprio app após deploy — preencher em Settings > Variables > PING_APP_URL
