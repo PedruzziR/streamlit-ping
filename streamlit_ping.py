@@ -31,8 +31,6 @@ STREAMLIT_APPS = [
     "https://neuropsicologa-bruna-ligoski-formulario-inicial-adulto.streamlit.app/",
     "https://neuropsicologa-bruna-ligoski-formulario-inicial-infantil.streamlit.app/",
     "https://psicologabrunaligoski.streamlit.app/",
-    "https://psicologa-bruna-ligoski-declaracao-de-comparecimento.streamlit.app/",
-    "https://digital-signature-clinica-bruna-ligoski.streamlit.app/",
     "https://neuropsicologa-bruna-ligoski-escalaansiedadeinfantil.streamlit.app/",
 ]
 
