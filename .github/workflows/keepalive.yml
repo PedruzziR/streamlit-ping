@@ -1,3 +1,7 @@
+# PROIBIDO neste repositório: os gatilhos `pull_request_target` e
+# `issue_comment` — repo público com service_role nos secrets. Ver SECURITY.md.
+# Gatilhos permitidos: schedule, workflow_dispatch, push.
+
 name: Keepalive
 
 on:
