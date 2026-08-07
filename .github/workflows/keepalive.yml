@@ -1,6 +1,11 @@
 # PROIBIDO neste repositório: os gatilhos `pull_request_target` e
 # `issue_comment` — repo público com service_role nos secrets. Ver SECURITY.md.
 # Gatilhos permitidos: schedule, workflow_dispatch, push.
+#
+# Objetivo deste workflow: o GitHub desativa workflows agendados após 60 dias
+# sem atividade no repositório. Apenas um push reinicia esse contador — religar
+# o workflow pelo botão da interface NÃO reinicia. Este job faz um commit vazio
+# semanal para manter o contador sempre zerado.
 
 name: Keepalive
 
@@ -13,12 +18,22 @@ jobs:
   keepalive:
     runs-on: ubuntu-latest
     permissions:
-      actions: write
+      contents: write       # necessário para o push do commit vazio
+      actions: write        # necessário para o `gh workflow enable`
+
     steps:
       - uses: actions/checkout@v4
+        # persist-credentials (padrão: true) deixa o GITHUB_TOKEN configurado
+        # no remote, que é o que autentica o push abaixo.
 
-      - name: Re-enable scheduled workflows
+      - name: Commit vazio para reiniciar o contador de inatividade
         run: |
-          gh workflow enable streamlit_ping.yml
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: keepalive — reinicia contador de inatividade do Actions"
+          git push origin HEAD:${GITHUB_REF_NAME}
+
+      - name: Religa o workflow de ping, caso já tenha sido desativado
+        run: gh workflow enable streamlit_ping.yml
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
