@@ -22,7 +22,7 @@ jobs:
       actions: write        # necessário para o `gh workflow enable`
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         # persist-credentials (padrão: true) deixa o GITHUB_TOKEN configurado
         # no remote, que é o que autentica o push abaixo.
 
